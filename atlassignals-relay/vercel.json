@@ -1,0 +1,22 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "bodyParser": false
+      }
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "api/index.ts" }
+  ],
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 30,
+      "runtime": "nodejs20.x"
+    }
+  }
+}

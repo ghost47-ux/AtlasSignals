@@ -1,0 +1,33 @@
+# ── Secrets ─────────────────────────────────────────────────────────────
+# NEVER commit real credentials.
+.env
+.env.local
+.env.*.local
+
+# ── Node backend (atlassignals-relay) ────────────────────────────────────
+node_modules/
+dist/
+coverage/
+
+# ── Python / HF Space artifacts ──────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ── Data caches (market data, engine outputs) ────────────────────────────
+cache/*.csv
+trading_engine/results/*.csv
+trading_engine/results/*.txt
+
+# ── OS / IDE ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# ── The HF Space is its own git repository (Hugging Face) ─────────────────
+# Its working copy lives in hf-space/ but is versioned and pushed separately
+# to huggingface.co/spaces/aka465355/AtlasSignals.
+hf-space/
