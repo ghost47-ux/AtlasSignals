@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /auth
+Disallow: /dashboard
+Disallow: /settings
+
+Sitemap: https://atlassignals-web.vercel.app/sitemap.xml

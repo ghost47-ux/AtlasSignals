@@ -1,0 +1,21 @@
+# deps / build
+node_modules/
+dist/
+dev-dist/
+*.local
+
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# logs / os / ide
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.vercel
+
+.vercel
+.env*

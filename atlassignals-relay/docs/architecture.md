@@ -59,14 +59,21 @@ src/
   services/
     signalService.ts      persistence + queries (source of truth)
     deliveryService.ts    outbox + placeholder channel senders
+    paystackService.ts    Paystack signature verify + webhook dispatch + initialize
     websocketService.ts   SSE broadcaster
   db/supabase.ts          service-role Supabase client
   schemas/signal.ts       THE canonical Zod schema
+  schemas/paystack.ts     Paystack webhook event schema
   middleware/verifySignature.ts  HMAC-SHA256 verification
+  middleware/requireAuth.ts      JWT auth + signal-access enforcement (RPC)
+  routes/
+    webhook.ts            POST /webhooks/signal
+    paystackWebhook.ts    POST /webhooks/paystack
+    payments.ts           POST /payments/initialize
   utils/logger.ts         pino
   utils/idempotency.ts    deterministic idempotency keys
 api/index.ts              Vercel serverless bridge
-supabase/migrations/      SQL schema
+supabase/migrations/      SQL schema (0001–0004) + RLS + functions
 tests/                    Vitest suite
 docs/                     this documentation
 ```
@@ -97,24 +104,56 @@ verbatim in `signals.raw_payload` (JSONB).
 
 ## 5. Database schema
 
-See `supabase/migrations/0001_init.sql`. Highlights:
+See `supabase/migrations/0001_init.sql` → `0004_rls_policies.sql` and
+[`docs/database.md`](database.md). Highlights:
 
 - `signals` — canonical records; `signal_id` UNIQUE, `idempotency_key` UNIQUE.
 - `delivery_outbox` — pending notification jobs (`pending` → `sent`/`failed`).
-- `users` / `subscriptions` / `delivery_channels` / `payments` — the future
-  multi-user foundation (roles: `free_trial` | `paid` | `admin`). Present but
-  not wired into the signal pipeline — that is intentional.
-- RLS is enabled with no policies; the backend uses the service-role key
-  (bypasses RLS). Policies arrive with the auth phase.
+- `users` / `subscriptions` / `delivery_channels` / `payments` — the multi-user
+  layer, fully built: Paystack-backed `payments`, one live `subscription` per
+  user (partial UNIQUE index), `auth_id` linkage to Supabase Auth, and roles
+  `free_trial` | `paid` | `admin`.
+- RLS is **fully enforced** with explicit policies; the backend uses the
+  service-role key (bypasses RLS) and the client/anon path is gated by RLS.
 
-## 6. Delivery (outbox pattern)
+### 5a. Access control (query-time, no cron)
+
+All enforcement is evaluated at query time with `now()` comparisons — there
+are no background jobs (free-tier safe). `user_can_access_signals_for(uuid)`
+is the single source of truth:
+
+- `free_trial` → 24h window (`trial_ends_at`)
+- `paid` → 1-month window from Paystack confirmation (`ends_at`)
+- `admin` → always
+
+The read API enforces it via RPC after JWT verification; RLS enforces the
+same rule for direct anon-key client reads.
+
+### 5b. Payments (Paystack)
+
+`payments.paystack_reference` is the unique idempotency key. The DB function
+`handle_paystack_charge_success` (service-role-only, advisory-locked) atomically
+marks the payment success, upgrades the role, and sets/extends the window.
+See [`docs/payments.md`](payments.md).
+
+## 6. Delivery (outbox pattern + push trigger)
 
 - The webhook only **schedules** delivery (`delivery_outbox` row, channel
-  `telegram`).
-- `deliveryService.processPendingDeliveries()` runs the queue; channel senders
-  (`sendTelegramSignal`, `sendDiscordSignal`, `sendEmailSignal`) are
-  placeholders to be implemented in the delivery phase.
-- Never send notifications inside the webhook request.
+  `telegram`) and responds — it never sends anything inline.
+- **Production delivery is a database trigger** (`0005_telegram_delivery.sql`):
+  pg_net (`net.http_post`) is enqueued inside the outbox insert transaction
+  and the Telegram Bot API call fires from a background worker immediately
+  after commit. No worker, no cron, no polling — works on Vercel serverless
+  (Vercel cron is unusable: Hobby = 1/day) and keeps the webhook <100ms.
+- Secrets are read from custom GUCs (`app.telegram_bot_token` /
+  `app.telegram_chat_id`, set once in the Supabase SQL editor) — never
+  committed.
+- `deliveryService.processPendingDeliveries()` + `sendTelegramSignal` remain
+  as a manual/fallback path (and the base for future per-user delivery via
+  `delivery_channels`); `sendDiscordSignal` / `sendEmailSignal` are
+  placeholders.
+- Delivery is best-effort: a send/enqueue failure never fails signal
+  ingestion (the row stays `pending` = audit trail).
 
 ## 7. Real-time dashboard (SSE)
 
@@ -124,9 +163,15 @@ See `supabase/migrations/0001_init.sql`. Highlights:
 
 ## 8. Security
 
-- HMAC-SHA256 over the exact raw body; header `x-atlas-signature`.
-- Constant-time comparison (`timingSafeEqual`).
+- HMAC-SHA256 over the exact raw body; header `x-atlas-signature` (signal webhook).
+- HMAC-SHA512 over the exact raw body; header `x-paystack-signature` (Paystack).
+- Constant-time comparison (`timingSafeEqual`) in both verifiers.
 - `WEBHOOK_SECRET` is shared between the Space and the Relay; never committed
   (`.env` is git-ignored).
 - Payload size capped at 1 MB.
 - Service-role key lives only on the server side.
+- Payment status is never trusted from the client — only the verified
+  Paystack webhook can activate a subscription, and only the DB functions can
+  write payments (revoked from `anon`/`authenticated`).
+- RLS blocks `anon` on every table; premium signal content is visible to
+  `authenticated` users only inside their live trial/paid window.
