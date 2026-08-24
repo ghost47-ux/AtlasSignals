@@ -10,7 +10,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const MODEL = 'llama-3.3-70b-versatile';
+const MODEL = 'qwen/qwen3.6-27b';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
